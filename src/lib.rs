@@ -1,9 +1,4 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::post,
-    Json, Router,
-};
+use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,7 +11,7 @@ pub mod validator;
 
 use bank_client::MockBank;
 use error::ApiErrorCode;
-use idempotency::{finalize, get_state, new_store, try_begin, IdempotencyStore};
+use idempotency::{IdempotencyStore, finalize, get_state, new_store, try_begin};
 use orchestrator::PaymentOrchestrator;
 use types::{PaymentRequest, PaymentResponse, TxnState, TxnStatus};
 use validator::validate_request;
@@ -40,7 +35,9 @@ impl AppState {
 }
 
 pub fn app(state: AppState) -> Router {
-    Router::new().route("/pay", post(handle_payment)).with_state(state)
+    Router::new()
+        .route("/pay", post(handle_payment))
+        .with_state(state)
 }
 
 pub async fn handle_payment(
@@ -99,7 +96,12 @@ pub async fn handle_payment(
 
     let (http_status, status, rrn, error_code) = match final_state {
         TxnState::Settled { rrn } => (StatusCode::OK, TxnStatus::Success, Some(rrn), None),
-        TxnState::Failed { reason } => (StatusCode::PAYMENT_REQUIRED, TxnStatus::Failed, None, Some(reason)),
+        TxnState::Failed { reason } => (
+            StatusCode::PAYMENT_REQUIRED,
+            TxnStatus::Failed,
+            None,
+            Some(reason),
+        ),
         TxnState::TimedOut => (
             StatusCode::GATEWAY_TIMEOUT,
             TxnStatus::Timeout,

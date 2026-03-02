@@ -1,4 +1,4 @@
-use upi_switch::{app, AppState};
+use upi_switch::{AppState, app};
 
 #[tokio::main]
 async fn main() {
@@ -13,7 +13,5 @@ async fn main() {
         .await
         .expect("failed to bind listener");
 
-    axum::serve(listener, router)
-        .await
-        .expect("server failed");
+    axum::serve(listener, router).await.expect("server failed");
 }

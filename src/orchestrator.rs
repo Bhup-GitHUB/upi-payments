@@ -1,12 +1,140 @@
 use crate::bank_client::BankClient;
 use crate::types::TxnState;
 use std::sync::Arc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 pub struct PaymentOrchestrator {
     pub payer_bank: Arc<dyn BankClient>,
     pub payee_bank: Arc<dyn BankClient>,
     hard_timeout_ms: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PaymentOrchestrator;
+    use crate::bank_client::{BankClient, BankError};
+    use crate::types::TxnState;
+    use async_trait::async_trait;
+    use std::sync::Arc;
+    use tokio::time::{Duration, sleep};
+
+    struct StubBank {
+        debit_result: Result<String, BankError>,
+        credit_result: Result<String, BankError>,
+        credit_delay_ms: u64,
+    }
+
+    #[async_trait]
+    impl BankClient for StubBank {
+        async fn debit(
+            &self,
+            _vpa: &str,
+            _amount_paise: u64,
+            _txn_id: &str,
+        ) -> Result<String, BankError> {
+            self.debit_result.clone()
+        }
+
+        async fn credit(
+            &self,
+            _vpa: &str,
+            _amount_paise: u64,
+            _txn_id: &str,
+        ) -> Result<String, BankError> {
+            if self.credit_delay_ms > 0 {
+                sleep(Duration::from_millis(self.credit_delay_ms)).await;
+            }
+            self.credit_result.clone()
+        }
+
+        async fn reverse_debit(
+            &self,
+            _vpa: &str,
+            _amount_paise: u64,
+            _txn_id: &str,
+        ) -> Result<(), BankError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn settles_on_debit_credit_success() {
+        let payer = Arc::new(StubBank {
+            debit_result: Ok("DRRN".to_string()),
+            credit_result: Ok("IGNORED".to_string()),
+            credit_delay_ms: 0,
+        });
+        let payee = Arc::new(StubBank {
+            debit_result: Ok("IGNORED".to_string()),
+            credit_result: Ok("CRRN".to_string()),
+            credit_delay_ms: 0,
+        });
+        let orchestrator = PaymentOrchestrator::new(payer, payee);
+        let state = orchestrator.execute("a", "b", 1000, "txn").await;
+        assert_eq!(
+            state,
+            TxnState::Settled {
+                rrn: "CRRN".to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn fails_on_debit_failure() {
+        let payer = Arc::new(StubBank {
+            debit_result: Err(BankError::InsufficientFunds),
+            credit_result: Ok("IGNORED".to_string()),
+            credit_delay_ms: 0,
+        });
+        let payee = Arc::new(StubBank {
+            debit_result: Ok("IGNORED".to_string()),
+            credit_result: Ok("IGNORED".to_string()),
+            credit_delay_ms: 0,
+        });
+        let orchestrator = PaymentOrchestrator::new(payer, payee);
+        let state = orchestrator.execute("a", "b", 1000, "txn").await;
+        match state {
+            TxnState::Failed { reason } => assert!(reason.contains("DEBIT_FAILED")),
+            _ => panic!("expected failed state"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fails_on_credit_failure() {
+        let payer = Arc::new(StubBank {
+            debit_result: Ok("DRRN".to_string()),
+            credit_result: Ok("IGNORED".to_string()),
+            credit_delay_ms: 0,
+        });
+        let payee = Arc::new(StubBank {
+            debit_result: Ok("IGNORED".to_string()),
+            credit_result: Err(BankError::Unavailable),
+            credit_delay_ms: 0,
+        });
+        let orchestrator = PaymentOrchestrator::new(payer, payee);
+        let state = orchestrator.execute("a", "b", 1000, "txn").await;
+        match state {
+            TxnState::Failed { reason } => assert!(reason.contains("CREDIT_FAILED")),
+            _ => panic!("expected failed state"),
+        }
+    }
+
+    #[tokio::test]
+    async fn times_out_on_slow_credit() {
+        let payer = Arc::new(StubBank {
+            debit_result: Ok("DRRN".to_string()),
+            credit_result: Ok("IGNORED".to_string()),
+            credit_delay_ms: 0,
+        });
+        let payee = Arc::new(StubBank {
+            debit_result: Ok("IGNORED".to_string()),
+            credit_result: Ok("CRRN".to_string()),
+            credit_delay_ms: 100,
+        });
+        let orchestrator = PaymentOrchestrator::with_timeout(payer, payee, 10);
+        let state = orchestrator.execute("a", "b", 1000, "txn").await;
+        assert_eq!(state, TxnState::TimedOut);
+    }
 }
 
 impl PaymentOrchestrator {
@@ -64,7 +192,10 @@ impl PaymentOrchestrator {
             };
         }
 
-        let credit_result = self.payee_bank.credit(payee_vpa, amount_paise, txn_id).await;
+        let credit_result = self
+            .payee_bank
+            .credit(payee_vpa, amount_paise, txn_id)
+            .await;
 
         match credit_result {
             Ok(rrn) => TxnState::Settled { rrn },

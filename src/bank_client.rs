@@ -18,8 +18,14 @@ pub enum BankError {
 #[async_trait]
 pub trait BankClient: Send + Sync {
     async fn debit(&self, vpa: &str, amount_paise: u64, txn_id: &str) -> Result<String, BankError>;
-    async fn credit(&self, vpa: &str, amount_paise: u64, txn_id: &str) -> Result<String, BankError>;
-    async fn reverse_debit(&self, vpa: &str, amount_paise: u64, txn_id: &str) -> Result<(), BankError>;
+    async fn credit(&self, vpa: &str, amount_paise: u64, txn_id: &str)
+    -> Result<String, BankError>;
+    async fn reverse_debit(
+        &self,
+        vpa: &str,
+        amount_paise: u64,
+        txn_id: &str,
+    ) -> Result<(), BankError>;
 }
 
 pub struct MockBank {
@@ -52,7 +58,12 @@ impl BankClient for MockBank {
         Ok(self.rrn(txn_id, "DEBIT"))
     }
 
-    async fn credit(&self, vpa: &str, amount_paise: u64, txn_id: &str) -> Result<String, BankError> {
+    async fn credit(
+        &self,
+        vpa: &str,
+        amount_paise: u64,
+        txn_id: &str,
+    ) -> Result<String, BankError> {
         if vpa.contains("slow") || amount_paise == 33_333 {
             sleep(Duration::from_secs(35)).await;
             return Err(BankError::Timeout);

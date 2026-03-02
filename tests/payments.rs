@@ -2,7 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::util::ServiceExt;
 use upi_switch::types::{PaymentRequest, PaymentResponse, TxnStatus};
-use upi_switch::{app, AppState};
+use upi_switch::{AppState, app};
 use uuid::Uuid;
 
 fn now_ms() -> u64 {
@@ -31,7 +31,9 @@ async fn post_pay(state: AppState, req: &PaymentRequest) -> (StatusCode, Payment
         .method("POST")
         .uri("/pay")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(req).expect("serialize request")))
+        .body(Body::from(
+            serde_json::to_vec(req).expect("serialize request"),
+        ))
         .expect("build request");
 
     let response = app.oneshot(request).await.expect("router response");
@@ -69,10 +71,12 @@ async fn deterministic_credit_failure() {
     let (status, payload) = post_pay(state, &req).await;
     assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
     assert_eq!(payload.status, TxnStatus::Failed);
-    assert!(payload
-        .error_code
-        .expect("error code")
-        .contains("CREDIT_FAILED"));
+    assert!(
+        payload
+            .error_code
+            .expect("error code")
+            .contains("CREDIT_FAILED")
+    );
 }
 
 #[tokio::test]
@@ -96,7 +100,9 @@ async fn same_transaction_concurrency_keeps_single_success() {
     for _ in 0..5 {
         let state_clone = state.clone();
         let req_clone = req.clone();
-        tasks.push(tokio::spawn(async move { post_pay(state_clone, &req_clone).await }));
+        tasks.push(tokio::spawn(async move {
+            post_pay(state_clone, &req_clone).await
+        }));
     }
 
     let mut success = 0_u8;
